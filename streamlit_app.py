@@ -10,12 +10,55 @@ import urllib.parse
 import time
 import random
 import json
+import sqlite3
+
+# --- SQLite DB Setup ---
+DB_PATH = "a.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS leads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            title TEXT,
+            company TEXT,
+            email TEXT UNIQUE,
+            linkedin TEXT,
+            snippet TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def insert_lead(lead):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("""
+            INSERT OR IGNORE INTO leads (name, title, company, email, linkedin, snippet)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            lead.get("Name"),
+            lead.get("Title"),
+            lead.get("Company"),
+            lead.get("Email"),
+            lead.get("LinkedIn"),
+            lead.get("Snippet"),
+        ))
+        conn.commit()
+    finally:
+        conn.close()
+
+# Initialize DB at startup
+init_db()
 
 # --- Config ---
 st.set_page_config(page_title="Email Outreach Tool", layout="centered")
-st.markdown("<h3 style='text-align: left;'>📬 Automated Email Outreach via SerpAPI + Company Website Scraper</h3>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: left;'> FineIT's Automated Email Outreach for CRM by M.Ahmad </h3>", unsafe_allow_html=True)
 
-SERPAPI_API_KEY = "265ef9e90a7be7e3a687697464ebe3b523b28d2e73ab78ab305441fed7b1dc6e"
+SERPAPI_API_KEY = "2e265cccb6297a0f417c10856d6c410b1506bf48715714cd81d550fe3067e7a2"
 
 EMAIL_REGEX = re.compile(r'''
     \b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b
@@ -184,7 +227,7 @@ def search_company_email_via_serpapi(company_name):
         if emails:
             st.success(f"📧 Found email for {company_name} via Google: {emails[0]}")
             return emails[0]
-    st.warning(f"❌ No emails found for {company_name} via Google search.")
+    st.warning(f" No emails found for {company_name} via Google search.")
     return None
 
 def extract_company_from_snippet(title, snippet, link, debug=False):
@@ -280,6 +323,8 @@ def parse_leads_from_results(results, debug_mode=True):
             "Snippet": snippet
         }
         leads.append(lead)
+        # Insert into DB, skip duplicates
+        insert_lead(lead)
     return leads
 
 def fetch_company_website(company_name):
@@ -359,26 +404,26 @@ def search_crm_requirement_posts(pages=1):
 # --- Streamlit UI ---
 st.sidebar.header("SMTP Configuration")
 smtp_email = st.sidebar.text_input("📧 Your Email (SMTP)", value="your_email@example.com")
-smtp_password = st.sidebar.text_input("🔐 Email Password (or App Password)", type="password")
-smtp_server = st.sidebar.text_input("📤 SMTP Server", value="smtp.gmail.com")
-smtp_port = st.sidebar.number_input("🔌 SMTP Port", value=465, step=1)
+smtp_password = st.sidebar.text_input(" Email Password (or App Password)", type="password")
+smtp_server = st.sidebar.text_input(" SMTP Server", value="smtp.gmail.com")
+smtp_port = st.sidebar.number_input(" SMTP Port", value=465, step=1)
 
 st.header("Lead Generation Criteria")
-titles = st.text_input("👔 Titles (comma separated, e.g. CFO,CEO,CTO)", value="CFO,CEO")
-region = st.text_input("🌍 Region (e.g. UAE, Pakistan)", value="UAE")
-company_type = st.text_input("🏢 Company Type (e.g. Bank, Tech, Finance)", value="Bank")
-number_of_results = st.slider("🔢 Number of Google pages to scrape", 1, 5, 2)
+titles = st.text_input(" Titles (comma separated, e.g. CFO,CEO,CTO)", value="CFO,CEO")
+region = st.text_input("Region (e.g. UAE, Pakistan)", value="UAE")
+company_type = st.text_input(" Company Type (e.g. Bank, Tech, Finance)", value="Bank")
+number_of_results = st.slider(" Number of Google pages to scrape", 1, 5, 2)
 
-debug_mode = st.checkbox("🐛 Enable Debug Mode", value=True)
+debug_mode = st.checkbox(" Enable Debug Mode", value=True)
 
 st.header("Email Outreach Template")
 user_prompt = st.text_area(
     "✍️ Email Template (use {name} for first name, {company} for company name)",
-    placeholder="Subject: Partnership Opportunity\n\nHello {name} from {company},\n\nI wanted to introduce you to our AI tool...",
-    value="Subject: Partnership Opportunity\n\nHello {name} from {company},\n\nI hope this message finds you well. I wanted to reach out to introduce our innovative AI solution that could benefit your organization.\n\nBest regards"
+    placeholder="Subject: Partnership Opportunity\n\nHello {name} from {company},\n\nI wanted to introduce you to IFRS9...",
+    value="Subject: Partnership Opportunity\n\nHello {name} from {company},\n\nI hope this message finds you well. I wanted to reach out to introduce our IFRS9 solutions.\n\nBest regards"
 )
 
-if st.button("🔍 Scrape Leads"):
+if st.button(" Scrape Leads"):
     if not all([smtp_email, smtp_password, smtp_server, smtp_port, user_prompt, titles]):
         st.error("❗ Please fill all required fields (SMTP details, Titles, Email Template).")
     else:
@@ -393,7 +438,7 @@ if st.button("🔍 Scrape Leads"):
         with st.spinner("Scraping LinkedIn leads from Google..."):
             raw_results = serpapi_Google_Search(search_query, number_of_results, show_debug=debug_mode)
             if not raw_results:
-                st.error("❌ No results returned from SerpAPI. Check your API key and query.")
+                st.error(" No results returned from SerpAPI. Check your API key and query.")
             else:
                 leads = parse_leads_from_results(raw_results, debug_mode)
                 if leads:
@@ -405,8 +450,8 @@ if st.button("🔍 Scrape Leads"):
                         st.success(f"✅ Found {len(leads_with_emails)} leads with email addresses.")
                         st.session_state["leads"] = leads_with_emails
                     else:
-                        st.warning("⚠️ No leads with emails found in snippets. Will try to find emails on company websites or Google...")
-                        st.subheader("🌐 Searching Company Websites and Google for Emails:")
+                        st.warning(" No leads with emails found in snippets. Will try to find emails on company websites or Google...")
+                        st.subheader(" Searching Company Websites and Google for Emails:")
                         progress_bar = st.progress(0)
                         scraped_websites = {}
                         for i, lead in enumerate(leads):
@@ -421,7 +466,7 @@ if st.button("🔍 Scrape Leads"):
                                         emails_from_website = extract_emails_from_url(company_website)
                                         if emails_from_website:
                                             lead["Email"] = emails_from_website[0]
-                                            st.success(f"📧 Found email: {lead['Email']}")
+                                            st.success(f" Found email: {lead['Email']}")
                                         else:
                                             st.write(f"⚠️ No emails found on {company_website}")
                                     else:
@@ -432,6 +477,8 @@ if st.button("🔍 Scrape Leads"):
                                     if email_from_google:
                                         lead["Email"] = email_from_google
                             time.sleep(random.uniform(0.5, 1.5))
+                            # Insert updated lead into DB
+                            insert_lead(lead)
                         final_leads = [lead for lead in leads if lead["Email"]]
                         st.session_state["leads"] = final_leads
                         if final_leads:
@@ -439,9 +486,9 @@ if st.button("🔍 Scrape Leads"):
                             df_final = pd.DataFrame(final_leads)
                             st.dataframe(df_final)
                         else:
-                            st.error("❌ No leads with valid email addresses found.")
+                            st.error(" No leads with valid email addresses found.")
                 else:
-                    st.error("❌ No leads could be parsed from the search results.")
+                    st.error(" No leads could be parsed from the search results.")
 
 if "leads" in st.session_state and st.session_state["leads"] and st.button("✍️ Generate Email Drafts"):
     email_drafts = []
@@ -486,7 +533,7 @@ if "email_drafts" in st.session_state and st.session_state["email_drafts"] and s
         del st.session_state["leads"]
 
 # --- CRM Requirement Posts UI ---
-st.header("🔗 CRM Requirement Posts Finder")
+st.header("🔗 CRM Requirement Posts Search")
 if st.button("🔍 Find CRM Requirement Posts"):
     posts = search_crm_requirement_posts(pages=2)
     if posts:
@@ -495,6 +542,5 @@ if st.button("🔍 Find CRM Requirement Posts"):
             st.markdown(f"- [{post['title']}]({post['link']})")
             if post['snippet']:
                 st.caption(post['snippet'])
-              
     else:
         st.warning("No relevant posts found.")
