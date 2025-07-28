@@ -217,7 +217,6 @@ def extract_emails_from_url(url, max_depth=1, visited=None):
     return list(emails_found)
 
 def search_company_email_via_serpapi(company_name):
-    """Search Google for 'company name email' and extract emails from snippets."""
     query = f'"{company_name}" email'
     st.info(f"🔎 Searching for emails with query: {query}")
     results = serpapi_Google_Search(query, pages=1, show_debug=False)
@@ -232,7 +231,6 @@ def search_company_email_via_serpapi(company_name):
 
 def extract_company_from_snippet(title, snippet, link, debug=False):
     company = ""
-    # 1. Try to extract from snippet using common patterns
     snippet_patterns = [
         r'works\s+(?:at|for)\s*[:\-]?\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
         r'at\s*[:\-]?\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
@@ -245,7 +243,6 @@ def extract_company_from_snippet(title, snippet, link, debug=False):
         if match:
             company = match.group(1).strip(" .,-:;")
             break
-    # 2. If not found in snippet, try title (LinkedIn style)
     if not company:
         title_match = re.search(r'(?:at|@)\s*([A-Za-z0-9&.,\-\'\(\) ]+)', title, re.IGNORECASE)
         if title_match:
@@ -256,7 +253,6 @@ def extract_company_from_snippet(title, snippet, link, debug=False):
                 possible_company = parts[-1].strip()
                 if re.search(r'(bank|finance|group|inc|ltd|llc|corp|company|pvt|gmbh|sa)', possible_company, re.IGNORECASE):
                     company = possible_company
-    # 3. Clean up company name
     if company:
         company = re.sub(r'official website|careers|about us|linkedin|profile', '', company, flags=re.IGNORECASE).strip()
         company = re.sub(r'\b(llc|inc|ltd|corp|pvt|gmbh|sa)\b\.?', '', company, flags=re.IGNORECASE).strip()
@@ -323,7 +319,6 @@ def parse_leads_from_results(results, debug_mode=True):
             "Snippet": snippet
         }
         leads.append(lead)
-        # Insert into DB, skip duplicates
         insert_lead(lead)
     return leads
 
@@ -369,6 +364,7 @@ def send_email(to_email: str, subject: str, body: str, smtp_details):
 
 def build_search_query(titles, region, company_type):
     titles_list = [t.strip() for t in titles.split(",") if t.strip()]
+    company_types_list = [c.strip() for c in company_type.split(",") if c.strip()]
     parts = []
     if titles_list:
         if len(titles_list) == 1:
@@ -378,13 +374,16 @@ def build_search_query(titles, region, company_type):
             parts.append(f"({title_query})")
     if region:
         parts.append(f'"{region}"')
-    if company_type:
-        parts.append(f'"{company_type}"')
+    if company_types_list:
+        if len(company_types_list) == 1:
+            parts.append(f'"{company_types_list[0]}"')
+        else:
+            company_query = " OR ".join([f'"{c}"' for c in company_types_list])
+            parts.append(f"({company_query})")
     parts.append("site:linkedin.com/in")
     query = " ".join(parts)
     return query
 
-# --- CRM Requirement Posts Search ---
 def search_crm_requirement_posts(pages=1):
     query = '"need CRM" OR "require CRM" OR "looking for CRM" OR "CRM services required"'
     st.info(f"🔎 Searching for posts: {query}")
@@ -411,7 +410,7 @@ smtp_port = st.sidebar.number_input(" SMTP Port", value=465, step=1)
 st.header("Lead Generation Criteria")
 titles = st.text_input(" Titles (comma separated, e.g. CFO,CEO,CTO)", value="CFO,CEO")
 region = st.text_input("Region (e.g. UAE, Pakistan)", value="UAE")
-company_type = st.text_input(" Company Type (e.g. Bank, Tech, Finance)", value="Bank")
+company_type = st.text_input(" Company Type (comma separated, e.g. Bank, Tech, Finance)", value="Bank")
 number_of_results = st.slider(" Number of Google pages to scrape", 1, 5, 2)
 
 debug_mode = st.checkbox(" Enable Debug Mode", value=True)
@@ -472,12 +471,10 @@ if st.button(" Scrape Leads"):
                                     else:
                                         st.warning(f"⚠️ Could not find website for: {company_name}")
                                 if not lead["Email"]:
-                                    # Try Google search for company email
                                     email_from_google = search_company_email_via_serpapi(company_name)
                                     if email_from_google:
                                         lead["Email"] = email_from_google
                             time.sleep(random.uniform(0.5, 1.5))
-                            # Insert updated lead into DB
                             insert_lead(lead)
                         final_leads = [lead for lead in leads if lead["Email"]]
                         st.session_state["leads"] = final_leads
@@ -532,7 +529,6 @@ if "email_drafts" in st.session_state and st.session_state["email_drafts"] and s
         del st.session_state["email_drafts"]
         del st.session_state["leads"]
 
-# --- CRM Requirement Posts UI ---
 st.header("🔗 CRM Requirement Posts Search")
 if st.button("🔍 Find CRM Requirement Posts"):
     posts = search_crm_requirement_posts(pages=2)
