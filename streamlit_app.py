@@ -51,14 +51,14 @@ def insert_lead(lead):
     finally:
         conn.close()
 
-# Initialize DB at startup
 init_db()
 
 # --- Config ---
 st.set_page_config(page_title="Email Outreach Tool", layout="centered")
 st.markdown("<h3 style='text-align: left;'> FineIT's Automated Email Outreach for CRM by M.Ahmad </h3>", unsafe_allow_html=True)
 
-SERPAPI_API_KEY = "2e265cccb6297a0f417c10856d6c410b1506bf48715714cd81d550fe3067e7a2"
+GOOGLE_API_KEY = "AIzaSyBs5HgWW2jStcf7963KpYROxLut6WTYD-U"
+CSE_ID = "c22b958e8780f493d"
 
 EMAIL_REGEX = re.compile(r'''
     \b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,7}\b
@@ -69,6 +69,12 @@ BLOCKED_DOMAINS = {
     "protonmail.com", "gmail.com", "yahoo.com", "outlook.com", "hotmail.com",
     "aol.com", "icloud.com", "live.com",
 }
+
+TITLE_KEYWORDS = [
+    "CEO", "President", "CFO", "Chairman", "Executive Vice President", "Head", "Founder",
+    "Senior Executive Vice President", "Group Head", "Board Member", "Director", "Manager",
+    "Vice President", "Chief", "Officer", "Partner", "Owner"
+]
 
 def is_valid_email(email: str) -> bool:
     return re.fullmatch(EMAIL_REGEX, email) is not None
@@ -84,43 +90,38 @@ def is_valid_business_email(email: str) -> bool:
         return False
     return True
 
-def serpapi_Google_Search(query, pages=1, show_debug=True):
+def google_custom_search(query, pages=1, show_debug=True):
     all_results = []
     if show_debug:
         progress_bar = st.progress(0)
     for page in range(pages):
         if show_debug:
             progress_bar.progress((page) / pages)
-        start = page * 10
+        start = page * 10 + 1
         params = {
-            "engine": "google",
+            "key": GOOGLE_API_KEY,
+            "cx": CSE_ID,
             "q": query,
-            "api_key": SERPAPI_API_KEY,
             "start": start,
+            "num": 10,
             "hl": "en",
-            "gl": "us",
-            "num": 10
+            "gl": "us"
         }
         if show_debug:
             st.write(f"**Page {page+1}:** Making request with params:")
             st.json(params)
         try:
-            response = requests.get("https://serpapi.com/search", params=params, timeout=15)
+            response = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=15)
             if show_debug:
                 st.write(f"**Response Status:** {response.status_code}")
-            if response.status_code == 401:
-                st.error("❌ Unauthorized: Check your API key")
+            if response.status_code == 403:
+                st.error("❌ Forbidden: Check your API key and CSE ID")
                 break
             elif response.status_code == 429:
                 st.error("❌ Too many requests: Rate limit exceeded")
                 break
             elif response.status_code != 200:
                 st.error(f"❌ HTTP {response.status_code}: {response.text[:200]}")
-                break
-            content_type = response.headers.get('content-type', '')
-            if 'application/json' not in content_type:
-                st.error(f"❌ Expected JSON but got: {content_type}")
-                st.write(f"Response content: {response.text[:500]}")
                 break
             try:
                 data = response.json()
@@ -131,10 +132,7 @@ def serpapi_Google_Search(query, pages=1, show_debug=True):
             if show_debug:
                 with st.expander(f"Raw API Response - Page {page+1}"):
                     st.json(data)
-            if "error" in data:
-                st.error(f"SerpAPI Error: {data['error']}")
-                break
-            results = data.get("organic_results", [])
+            results = data.get("items", [])
             if show_debug:
                 st.info(f"Page {page+1}: Found {len(results)} raw results")
             for r in results:
@@ -216,10 +214,10 @@ def extract_emails_from_url(url, max_depth=1, visited=None):
         st.warning(f"Error scraping {url}: {e}")
     return list(emails_found)
 
-def search_company_email_via_serpapi(company_name):
+def search_company_email_via_google(company_name):
     query = f'"{company_name}" email'
     st.info(f"🔎 Searching for emails with query: {query}")
-    results = serpapi_Google_Search(query, pages=1, show_debug=False)
+    results = google_custom_search(query, pages=1, show_debug=False)
     for res in results:
         snippet = res.get("snippet", "")
         emails = extract_emails_from_text(snippet)
@@ -229,39 +227,75 @@ def search_company_email_via_serpapi(company_name):
     st.warning(f" No emails found for {company_name} via Google search.")
     return None
 
-def extract_company_from_snippet(title, snippet, link, debug=False):
+def extract_company_and_title(title, snippet, link):
+    # Improved extraction logic
     company = ""
-    snippet_patterns = [
-        r'works\s+(?:at|for)\s*[:\-]?\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
-        r'at\s*[:\-]?\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
-        r'@([A-Za-z0-9&.,\-\'\(\) ]+)',
-        r'for\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
-        r'with\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
-    ]
-    for pattern in snippet_patterns:
-        match = re.search(pattern, snippet, re.IGNORECASE)
-        if match:
-            company = match.group(1).strip(" .,-:;")
-            break
-    if not company:
-        title_match = re.search(r'(?:at|@)\s*([A-Za-z0-9&.,\-\'\(\) ]+)', title, re.IGNORECASE)
-        if title_match:
-            company = title_match.group(1).strip(" .,-:;")
+    role = ""
+    name = ""
+
+    # Try to extract name from LinkedIn title
+    if "linkedin.com/in/" in link:
+        title_parts = re.split(r'[|\-–—]', title)
+        title_parts = [p.strip() for p in title_parts if p.strip() and 'linkedin' not in p.lower()]
+        if len(title_parts) >= 1:
+            name = title_parts[0]
+        # Try to extract role from title parts
+        for part in title_parts:
+            for keyword in TITLE_KEYWORDS:
+                if keyword.lower() in part.lower():
+                    role = part
+                    break
+            if role:
+                break
+        # Try to extract company from title parts
+        for part in title_parts[::-1]:
+            if not any(keyword.lower() in part.lower() for keyword in TITLE_KEYWORDS) and len(part.split()) > 1:
+                company = part
+                break
+    else:
+        # Fallback: Try to extract name from start of title
+        name_match = re.match(r"^([A-Za-z .'-]+)", title)
+        if name_match:
+            name = name_match.group(1).strip()
+        # Try to extract role from title
+        for keyword in TITLE_KEYWORDS:
+            role_match = re.search(rf"\b{keyword}\b", title, re.IGNORECASE)
+            if role_match:
+                role = role_match.group(0)
+                break
+        # Try to extract company from title or snippet
+        company_match = re.search(r"at\s+([A-Za-z0-9&.\-\'\(\) ]+)", title)
+        if not company_match:
+            company_match = re.search(r"at\s+([A-Za-z0-9&.\-\'\(\) ]+)", snippet)
+        if company_match:
+            company = company_match.group(1).strip()
         else:
-            parts = re.split(r'[|\-–—]', title)
-            if len(parts) > 1:
-                possible_company = parts[-1].strip()
-                if re.search(r'(bank|finance|group|inc|ltd|llc|corp|company|pvt|gmbh|sa)', possible_company, re.IGNORECASE):
-                    company = possible_company
+            # Try to extract company from snippet using common patterns
+            snippet_patterns = [
+                r'works\s+(?:at|for)\s*[:\-]?\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
+                r'at\s*[:\-]?\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
+                r'@([A-Za-z0-9&.,\-\'\(\) ]+)',
+                r'for\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
+                r'with\s*([A-Za-z0-9&.,\-\'\(\) ]+)',
+            ]
+            for pattern in snippet_patterns:
+                match = re.search(pattern, snippet, re.IGNORECASE)
+                if match:
+                    company = match.group(1).strip(" .,-:;")
+                    break
+
+    # Clean company and role
     if company:
         company = re.sub(r'official website|careers|about us|linkedin|profile', '', company, flags=re.IGNORECASE).strip()
         company = re.sub(r'\b(llc|inc|ltd|corp|pvt|gmbh|sa)\b\.?', '', company, flags=re.IGNORECASE).strip()
         company = ' '.join(word.capitalize() for word in company.split())
         if len(company) < 3 or company.lower() in ['profile', 'official', 'website', 'careers']:
             company = ""
-    if debug:
-        st.write(f"Extracted company: {company}")
-    return company
+    if role:
+        role = role.strip(" .,-:;")
+    if name:
+        name = name.strip(" .,-:;")
+    return name, role, company
 
 def parse_leads_from_results(results, debug_mode=True):
     leads = []
@@ -271,45 +305,9 @@ def parse_leads_from_results(results, debug_mode=True):
         title = item.get("title") or ""
         snippet = item.get("snippet") or ""
         link = item.get("link") or ""
-        if debug_mode:
-            with st.expander(f"Result {i+1}: {title[:50]}..."):
-                st.write(f"**Title:** {title}")
-                st.write(f"**Link:** {link}")
-                st.write(f"**Snippet:** {snippet}")
-                emails_in_snippet = extract_emails_from_text(snippet)
-                valid_email = emails_in_snippet[0] if emails_in_snippet else ""
-                if emails_in_snippet:
-                    st.success(f"Found email in snippet: {valid_email}")
-                else:
-                    st.info("No email found in snippet")
-                name = ""
-                role = ""
-                company = extract_company_from_snippet(title, snippet, link, debug=True)
-                if "linkedin.com/in/" in link:
-                    title_parts = re.split(r'[|\-–—]', title)
-                    title_parts = [p.strip() for p in title_parts if p.strip() and 'linkedin' not in p.lower()]
-                    if len(title_parts) >= 1:
-                        name = title_parts[0].strip()
-                    if len(title_parts) >= 2:
-                        role_part = title_parts[1].strip()
-                        role = re.sub(r'\s+at\s+.*', '', role_part, flags=re.IGNORECASE).strip()
-                st.write(f"**Extracted Name:** {name}")
-                st.write(f"**Extracted Role:** {role}")
-                st.write(f"**Extracted Company:** {company}")
-        else:
-            emails_in_snippet = extract_emails_from_text(snippet)
-            valid_email = emails_in_snippet[0] if emails_in_snippet else ""
-            name = ""
-            role = ""
-            company = extract_company_from_snippet(title, snippet, link, debug=False)
-            if "linkedin.com/in/" in link:
-                title_parts = re.split(r'[|\-–—]', title)
-                title_parts = [p.strip() for p in title_parts if p.strip() and 'linkedin' not in p.lower()]
-                if len(title_parts) >= 1:
-                    name = title_parts[0].strip()
-                if len(title_parts) >= 2:
-                    role_part = title_parts[1].strip()
-                    role = re.sub(r'\s+at\s+.*', '', role_part, flags=re.IGNORECASE).strip()
+        name, role, company = extract_company_and_title(title, snippet, link)
+        emails_in_snippet = extract_emails_from_text(snippet)
+        valid_email = emails_in_snippet[0] if emails_in_snippet else ""
         lead = {
             "Name": name,
             "Title": role,
@@ -320,12 +318,15 @@ def parse_leads_from_results(results, debug_mode=True):
         }
         leads.append(lead)
         insert_lead(lead)
+        if debug_mode:
+            with st.expander(f"Result {i+1}: {name} - {role} - {company}"):
+                st.write(lead)
     return leads
 
 def fetch_company_website(company_name):
     query = f'"{company_name}" official website OR "{company_name}" contact'
     st.info(f"Searching for company website: `{query}`")
-    results = serpapi_Google_Search(query, pages=1, show_debug=False)
+    results = google_custom_search(query, pages=1, show_debug=False)
     for res in results:
         link = res.get("link")
         if link:
@@ -384,22 +385,6 @@ def build_search_query(titles, region, company_type):
     query = " ".join(parts)
     return query
 
-def search_crm_requirement_posts(pages=1):
-    query = '"need CRM" OR "require CRM" OR "looking for CRM" OR "CRM services required"'
-    st.info(f"🔎 Searching for posts: {query}")
-    results = serpapi_Google_Search(query, pages=pages, show_debug=False)
-    posts = []
-    for res in results:
-        title = res.get("title", "")
-        link = res.get("link", "")
-        snippet = res.get("snippet", "")
-        posts.append({
-            "title": title,
-            "link": link,
-            "snippet": snippet
-        })
-    return posts
-
 # --- Streamlit UI ---
 st.sidebar.header("SMTP Configuration")
 smtp_email = st.sidebar.text_input("📧 Your Email (SMTP)", value="your_email@example.com")
@@ -435,9 +420,9 @@ if st.button(" Scrape Leads"):
         search_query = build_search_query(titles, region, company_type)
         st.info(f"🔎 Search Query: `{search_query}`")
         with st.spinner("Scraping LinkedIn leads from Google..."):
-            raw_results = serpapi_Google_Search(search_query, number_of_results, show_debug=debug_mode)
+            raw_results = google_custom_search(search_query, number_of_results, show_debug=debug_mode)
             if not raw_results:
-                st.error(" No results returned from SerpAPI. Check your API key and query.")
+                st.error(" No results returned from Google Custom Search. Check your API key, CSE ID, and query.")
             else:
                 leads = parse_leads_from_results(raw_results, debug_mode)
                 if leads:
@@ -471,7 +456,7 @@ if st.button(" Scrape Leads"):
                                     else:
                                         st.warning(f"⚠️ Could not find website for: {company_name}")
                                 if not lead["Email"]:
-                                    email_from_google = search_company_email_via_serpapi(company_name)
+                                    email_from_google = search_company_email_via_google(company_name)
                                     if email_from_google:
                                         lead["Email"] = email_from_google
                             time.sleep(random.uniform(0.5, 1.5))
@@ -529,14 +514,25 @@ if "email_drafts" in st.session_state and st.session_state["email_drafts"] and s
         del st.session_state["email_drafts"]
         del st.session_state["leads"]
 
-st.header("🔗 CRM Requirement Posts Search")
-if st.button("🔍 Find CRM Requirement Posts"):
-    posts = search_crm_requirement_posts(pages=2)
-    if posts:
-        st.success(f"Found {len(posts)} posts about CRM requirements.")
-        for post in posts:
-            st.markdown(f"- [{post['title']}]({post['link']})")
-            if post['snippet']:
-                st.caption(post['snippet'])
+# --- Dynamic Post Search ---
+st.header("🔗 Dynamic Post Search")
+post_query = st.text_input(
+    "Enter any post/topic to search (e.g. 'IFRS9 services required', 'IFRS 17 services needed', etc.)",
+    value="IFRS9 services required"
+)
+post_pages = st.slider("Number of Google pages to scrape for posts", 1, 5, 2)
+
+if st.button("🔍 Scrape Posts"):
+    if not post_query.strip():
+        st.error("Please enter a search query for posts.")
     else:
-        st.warning("No relevant posts found.")
+        st.info(f"🔎 Searching for posts: {post_query}")
+        post_results = google_custom_search(post_query, pages=post_pages, show_debug=debug_mode)
+        if post_results:
+            st.success(f"Found {len(post_results)} posts.")
+            for post in post_results:
+                st.markdown(f"- [{post['title']}]({post['link']})")
+                if post['snippet']:
+                    st.caption(post['snippet'])
+        else:
+            st.warning("No relevant posts found.")
